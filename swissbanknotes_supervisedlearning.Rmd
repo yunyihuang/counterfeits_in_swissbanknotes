@@ -1,0 +1,515 @@
+---
+title: "Counterfeits in Swiss Bank Notes"
+output: html_document
+author: Yunyi Huang
+---
+ 
+## Introduction
+In this report, the Swiss bank notes dataset is analyzed. I wish to know whether or not we can predict whether a note is false or counterfeit using supervised learning. I will create logistic regression model and linear discriminant analysis model for helping me to answer the research question.
+
+The dataset was originally extracted from “Multivariate Statistics: A practical approach”, by Bernhard Flury and Hans Riedwyl, Chapman and Hall, 1988, and contains six variables measured on 100 genuine and 100 counterfeit old Swiss 1000-franc bank notes:
+  
+1. Length:   Length of the note
+2. Left:     Width of the Left-Hand side of the note
+3. Right:    Width of the Right-Hand side of the note
+4. Bottom:   Width of the Bottom Margin
+5. Top:      Width of the Top Margin
+6. Diagonal: Diagonal Length of Printed Area
+
+## Analysis
+### Load & Read Data
+```{r}
+notes <- read.table("data/SBN.txt")
+head(notes)
+```
+
+I began by reading the data and take a look. There are 6 variables, besides index, of 200 observations of Swiss bank note.
+
+__Add a new column for counterfeits__
+
+Since the original data set does not contain a column for whether a Swiss bank note is counterfeit or not (the outcome variable), I added a column called "ctf" as the binary variable, and set the first 100 bank notes to 0 (for genuine), and set the last 100 bank notes to 1 (for counterfeit).
+```{r}
+notes$num <- seq(1,200)
+ctf <- ifelse(notes$num > 100, 1, 0)
+notes <- cbind(notes, ctf)
+notes <- subset(notes, select = -c(num))
+head(notes)
+```
+
+### Visualization
+Before formulating our test hypothesis, I first created some visualizations to get a brief picture of the data set.
+```{r}
+par(mfrow=c(2,3))
+hist(notes$Length, main = "Distribution of Length", xlab = "Length", col = "blue")
+hist(notes$Left, main = "Distribution of Left", xlab = "Left", col = "blue")
+hist(notes$Right, main = "Distribution of Right", xlab = "Right", col = "blue")
+hist(notes$Bottom, main = "Distribution of Bottom", xlab = "Bottom", col = "blue")
+hist(notes$Top, main = "Distribution of Top", xlab = "Top", col = "blue")
+hist(notes$Diagonal, main = "Distribution of Diagonal", xlab = "Diagonal", col = "blue")
+```
+
+From the plots above, I can see that Length, Right, and Bottom have a slight right-skewed distribution, and Left and Top have a slight left-skewed distribution. Interestingly, Diagonal has a bimodal distribution, which mens that there are two peaks in the histogram. 
+
+Since a Swiss bank note is rectangular, I was expecting that the distributions of Left and Right, also Bottom and Top, are identical to some extent. Noted that there are some differences among these variables.
+```{r}
+par(mfrow=c(2,3))
+boxplot(notes$Length, main = "Distribution of Length", xlab = "Length", col = "cyan")
+boxplot(notes$Left, main = "Distribution of Left", xlab = "Left", col = "cyan")
+boxplot(notes$Right, main = "Distribution of Right", xlab = "Right", col = "cyan")
+boxplot(notes$Bottom, main = "Distribution of Bottom", xlab = "Bottom", col = "cyan")
+boxplot(notes$Top, main = "Distribution of Top", xlab = "Top", col = "cyan")
+boxplot(notes$Diagonal, main = "Distribution of Diagonal", xlab = "Diagonal", col = "cyan")
+```
+
+However, the histograms and boxplots above for the data distributions are not enough to tell the details of the genuine and counterfeit bank notes. For better visualization, I divided the data into two parts: genuine and counterfeit. I will compare the two groups by different variables using boxplots.
+
+```{r}
+par(mfrow = c(2,3))
+boxplot(Length ~ ctf, data = notes, col= c(3,2), main = "Distribution of Length", xlab = "genuine v. counterfeit")
+boxplot(Left ~ ctf, data = notes, col= c(3,2), main = "Distribution of Left", xlab = "genuine v. counterfeit")
+boxplot(Right ~ ctf, data = notes, col= c(3,2), main = "Distribution of Right", xlab = "genuine v. counterfeit")
+boxplot(Bottom ~ ctf, data = notes, col= c(3,2), main = "Distribution of Bottom", xlab = "genuine v. counterfeit")
+boxplot(Top ~ ctf, data = notes, col= c(3,2), main = "Distribution of Top", xlab = "genuine v. counterfeit")
+boxplot(Diagonal ~ ctf, data = notes, col= c(3,2), main = "Distribution of Diagonal", xlab = "genuine v. counterfeit")
+```
+
+By creating boxplots separately for genuine group (green) and counterfeit group (red), I can easily see the difference in data distributions between these two groups. The genuine group and counterfeit group nearly do not have overlaps in data distribution. For Length, their distribution is overlapped and their median is close. However, the other variables data show two clusters clearly. Noted that this may affect the model performance later.
+
+```{r}
+# detailed information of genuine group
+summary(notes[1:100,1:6])
+# variance matrix
+var(notes[1:100,1:6])
+# covariance matrix
+cov(notes[1:100,1:6])
+```
+```{r}
+# detailed information of counterfeit group
+summary(notes[100:200,1:6])
+# variance matrix
+var(notes[100:200,1:6])
+# covariance matrix
+cov(notes[100:200,1:6])
+```
+```{r}
+library("lattice")
+levelplot(cor(notes[,1:6]))
+```
+
+In the plot above, the light blue color represents strong correlation between two variables, and purple represents weak correlation between two variables. I can see that most of the variables have some correlation. However, the variable of Diagonal seems to have really low correlation with other variables. Also, the variable of Length has low correlation with other variables as well. For Top, Bottom, Right, and Left, these four variable seem to have considerable correlation with each other. It is useful for the assumptions section later.
+```{r warning=FALSE}
+library(lattice)
+library(ellipse)
+cor_df <- cor(notes[,1:6])
+
+#Function to generate correlation plot
+panel.corrgram <- function(x,y,z,subscripts,at,level=0.9,label=FALSE,...){
+require("ellipse", quietly=TRUE)
+  x<-as.numeric(x)[subscripts]
+  y<-as.numeric(y)[subscripts]
+  z<-as.numeric(z)[subscripts]
+  zcol<-level.colors(z, at=at, ...)
+  for (i in seq(along=z)) {
+    ell=ellipse(z[i], level=level, npoints=50,
+                scale=c(.2,.2), centre=c(x[i], y[i]))
+    panel.polygon(ell, col=zcol[i], border=zcol[i], ...)
+  }
+  if (label)
+    panel.text(x=x, y=y, lab=100*round(z,2),cex=0.8,
+               col=ifelse(z<0, "White", "Black"))
+}
+
+##generate correlation plot
+print(levelplot(cor_df[seq(6,1), seq(6,1)], at=do.breaks(c(-1.01,1.01), 20), xlab=NULL, ylab=NULL, colorkey=list(space="top"), col.regions=rev(heat.colors(100)),
+                scale=list(x=list(rot=90)),
+                panel=panel.corrgram, label=TRUE))
+
+```
+
+### LDA & Logistic Regression
+For this part of the analysis, I chose to use the caret package to implement the models.
+```{r}
+# import package
+library(caret)
+
+# shuffle the original data and set random seed
+set.seed(1192)
+rows <- sample(nrow(notes))
+notes <- notes[rows,]
+head(notes)
+```
+
+The data has been shuffled above, and its purpose is to make sure the training and validation sets have some of the genuine and counterfeit notes.
+
+__Dividing Data with K-fold Cross-Validation__
+```{r}
+# Relabel values of outcome (0 = No, 1 = Yes)
+notes$ctf[notes$ctf==0] <- "No"
+notes$ctf[notes$ctf==1] <- "Yes"
+
+# Convert outcome variable to type factor
+notes$ctf <- as.factor(notes$ctf)
+
+# Specify the type of training method used
+# K-fold Cross-Validation Implementation
+ctrlspecs <- trainControl(method = "cv", number = 10, 
+                          savePredictions = "all",
+                          classProbs = TRUE)
+```
+
+__Logistic Regression Model__
+```{r warning=FALSE}
+# Set random seed
+set.seed(788)
+# Specify Logistic Regression Model
+model1 <- train(ctf ~ Length + Left + Right + Bottom + Top + Diagonal, 
+                data = notes,
+                method = "glm",
+                family = binomial, 
+                trControl = ctrlspecs)
+model1
+```
+
+According to the results above, the logistic regression model has an overall accuracy of 98.5% with a Kappa score of 0.97, indicating that it is an almost perfect model.
+```{r}
+# summary of this model
+summary(model1)
+```
+```{r}
+# variable importance
+varImp(model1)
+```
+
+From the variance importance score above, I can see that the Bottom variable is the most important for variance, and Left variable is the least importance.
+```{r}
+# check the accuracy for each fold 
+glm_fold_accuracy1 <- model1$resample
+glm_fold_accuracy1
+```
+
+The table above shows this model's accuracy for each fold through the 10-fold cross validation. I saved this result to a variable for later comparison and analysis.
+
+__Linear Discriminant Analysis Model__
+```{r}
+# Set random seed
+set.seed(788)
+# Specify Linear Discriminant Analysis Model
+model2 <- train(ctf ~ Length + Left + Right + Bottom + Top + Diagonal, 
+                data = notes,
+                method = "lda", 
+                family = binomial,
+                trControl = ctrlspecs)
+model2
+```
+
+According to the results above, the LDA model has an overall accuracy of 99.5% with a Kappa score of 0.99, indicating that it is an almost perfect model.
+```{r}
+# summary of this model
+summary(model2)
+```
+```{r}
+varImp(model2)
+```
+
+From the variance importance score above, I can see that the Diagonal variable is the most important for variance, and Length variable is the least importance.
+```{r}
+# check the accuracy for each fold 
+lda_fold_accuracy1 <- model2$resample
+lda_fold_accuracy1
+```
+
+The table above shows this model's accuracy for each fold through the 10-fold cross validation. I saved this result to a variable for later comparison and analysis.
+
+### Using Factor Model & Reduce Dimensions
+In the previous session, I used all six of the variables as the input variables in training data, which is high dimensional. It is always useful to reduce the dimension of data to get a better sense of it. To accomplish this, I chose to do a principle component analysis and a maximum likelihood estimation.
+
+__Principle Component Analysis__
+```{r}
+library(factoextra)
+# drop the outcome column for convenience
+new_notes <- notes[,1:6]
+
+# compute PCA
+notes_pca <- prcomp(new_notes, scale = TRUE)
+notes_pca
+```
+
+The results above show how each principle components affects different variables, and I made a scree plot for visualization for better understanding.
+```{r}
+get_eig(notes_pca)
+```
+
+The table above provides the eigenvalue, variance percent, and cumulative variance percent.
+```{r}
+# scree plot 
+# show the percentage of variances explained by each principal component
+fviz_eig(notes_pca, xlab = "PC")
+```
+
+From the scree plot above, I can see that there is a "elbow" occurred on PC2's data point. Specifically, PC1 accounts for nearly 50% of the variance, and for PC2 it is little above 20% of the variance. 
+```{r}
+# graph of individuals
+fviz_pca_ind(notes_pca,
+             col.ind = "cos2", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+```
+
+From the graph above, I can see that individuals with a similar profile are grouped together based on the first two principle components.
+
+__Maximum Likelihood Estimation__
+
+Using the implication from PCA above, I would set the number of factors to 2.
+```{r}
+# Maximum likelihood
+n.factors <- 2
+fa_fit <- factanal(new_notes, n.factors, scores = "regression", rotation = "varimax")
+fa_fit
+```
+```{r}
+# check the factor loading
+loading <- fa_fit$loadings[, 1:2]
+t(loading)
+```
+
+As suggested by the results, Factor 1 contributed to 39.9% of the proportion variance, and Factor 2 has 18%.
+
+```{r}
+# visualize the loading
+plot(loading, type = 'n', cex.axis=1.5, cex.lab=1.5)
+text(loading, labels=names(new_notes), cex=1.25)
+```
+
+The visualization above shows the variable relationships with two factors. I can see that Left and Right load heavily on both factors, Bottom and Top load heavily on Factor 1, Length loads more on Factor 2, and Diagonal load more on Factor 2 as well.
+
+### Re-run analysis on Factor Scores
+In this part, I will re-run both models on the factor scores of Factor 1 and Factor 2 I got from the previous section.
+
+__Modified the dataframe__
+```{r}
+# Add the factor scores into the dataframe
+scores <- fa_fit$scores
+notes<- cbind(notes, scores)
+
+# shuffle the original data
+set.seed(1192)
+rows <- sample(nrow(notes))
+notes <- notes[rows,]
+head(notes)
+```
+
+__Dividing Data with K-fold Cross-Validation__
+```{r}
+# Relabel values of outcome (0 = No, 1 = Yes)
+notes$ctf[notes$ctf==0] <- "No"
+notes$ctf[notes$ctf==1] <- "Yes"
+
+# Convert outcome variable to type factor
+notes$ctf <- as.factor(notes$ctf)
+
+# Specify the type of training method used
+# K-fold Cross-Validation Implementation
+ctrlspecs <- trainControl(method = "cv", number = 10, 
+                          savePredictions = "all",
+                          classProbs = TRUE)
+```
+
+__New Logistic Regression Model__
+```{r warning=FALSE}
+# Set random seed
+set.seed(788)
+# Specify Logistic Regression Model
+model1 <- train(ctf ~ Factor1+Factor2, 
+                data = notes,
+                method = "glm",
+                family = binomial, 
+                trControl = ctrlspecs)
+model1
+```
+
+According to the results above, the logistic regression model has an overall accuracy of 99% with a Kappa score of 0.98, indicating that it is an almost perfect model.
+```{r}
+# summary of this model
+summary(model1)
+```
+```{r}
+# variable importance
+varImp(model1)
+```
+
+From the variance importance score above, I can see that Factor 1 is the most important for variance, and Factor 2 is the least importance.
+```{r}
+# check the accuracy for each fold 
+glm_fold_accuracy2 <- model1$resample
+glm_fold_accuracy2
+```
+
+The table above shows this model's accuracy for each fold through the 10-fold cross validation. I saved this result to a variable for later comparison and analysis.
+
+__New Linear Discriminant Analysis Model__
+```{r}
+# Set random seed
+set.seed(788)
+# Specify Linear Discriminant Analysis Model
+model2 <- train(ctf ~ Factor1+Factor2, 
+                data = notes,
+                method = "lda", 
+                trControl = ctrlspecs)
+model2
+```
+
+According to the results above, the LDA model has an overall accuracy of 99.5% with a Kappa score of 0.99, indicating that it is an almost perfect model.
+```{r}
+# summary of this model
+summary(model2)
+```
+```{r}
+# variable importance
+varImp(model2)
+```
+
+From the variance importance score above, I can see that Factor 1 is the most important for variance, and Factor 2 is the least importance.
+```{r}
+# check the accuracy for each fold 
+lda_fold_accuracy2 <- model2$resample
+lda_fold_accuracy2
+```
+
+The table above shows this model's accuracy for each fold through the 10-fold cross validation. I saved this result to a variable for later comparison and analysis.
+
+### Discuss Assumptions 
+__(For convenience, most of the graphs and tables mentioned in justifications are already done in the Visualization Section)__
+
+__For Logistic Regression__
+
+The assumptions for logistic regression are listed below, as well as the justifications:
+
+1. The outcome is a binary or dichotomous variable like 1 v. 0.
+
+Justification: the outcome variable is whether Swiss bank note is genuine or counterfeit, taking values of 0 (genuine) and 1 (counterfeit), which is binary. This assumption is satisfied.
+
+2. The observations are independent of each other.
+
+Justification: in the original data set, the index names are like "BN1", "BN2", and "BN3", etc. which indicates that each observations are unique and independent. This assumption is satisfied.
+
+3. Little to no multicollinearity among the independent variables.
+
+Justification: according the levelplot I have made in the project's visualization section, the variables have low correlations with each other. This assumption is satisfied.
+
+4. Linearity of independent variables and log odds.
+
+Justification: I do know the exact relationship between each predictor variable and the log odds of the outcome, but for perform an analysis, I can assume that there is a linear relationship between independent variables and log odds.
+
+5. A large sample size.
+
+Justification: there are 200 observations in the dataset, which is large enough. This assumption is satisfied.
+
+__For Linear Discriminant Analysis__
+
+The assumptions for LDA are listed below, as well as the justifications:
+
+1. The dependent variable Y is discrete.
+
+Justification: the dependent variable Y in this analysis is whether Swiss bank note is genuine or counterfeit, taking values of 0 (genuine) and 1 (counterfeit), which is discrete. This assumption is satisfied.
+
+2. The independent variable(s) X come from Gaussian distributions.
+
+Justification: Gaussian distributions means that the values for each variables have a normal distribution. In the visualization section of this report, the histograms show that most of the variables have a normal distribution except Diagonal. I can still say that this assumption is satified, but there might be some potential errors since not all variables have normal distributions.
+
+3. Same Variance
+
+Justification: according to the variance and covariance matrix in this project's visualization section, there is same variance among the variables. This assumption is satisfied.
+
+__For Principle Component Analysis__
+
+The assumptions for PCA are listed below, as well as the justifications:
+
+1. There are multiple variables that should be measured at the continuous level.
+
+Justification: since the variables are all measured in length unit, whic are continuous. This assumption is satisfied.
+
+2. There needs to be a linear relationship between all vairables.
+
+Justification: according to the plots below, I can assume that there is a linear relationship between all vairables except for the variable of Diagonal. However, I can still say that this assumption is satified, but there might be some potential errors since not all variables have a linear relationship with other variables.
+```{r}
+pairs(notes[,1:6])
+```
+
+3. There is a sampling accuracy.
+
+Justification: there are 200 observations in the dataset, which is large enough. This assumption is satisfied.
+
+4. The data set should be suitable for data reduction.
+
+Justification: according to the levelplot in the project's visualization section, I can see that there are adequate correlations between the variables to be reduced to a samaller number of components. This assumption is satisfied.
+
+5. There should be no significant outliers.
+
+Justification: according to the boxplots in the project's visualization section, I can see that most of the variables have no significant outliers but some milds ones. However, these might cause some potential errors in the analysis. 
+
+__For Maximum Likelihood Estimation__
+
+The underlying assumption of MLE is that the data are independently sampled from a multivariate normal distribution with mean vector $\underline{\mu}$ and variance-covariance matrix ${\mathbf \Sigma}$ of the form:
+\[
+{\mathbf \Sigma} =
+ {\mathbf L} \,  {\mathbf L}^{\prime}    +  {\mathbf \Psi}.
+ \]
+ Justification: in the original data set, the index names are like "BN1", "BN2", and "BN3", etc. which indicates that each observations are unique and independent. This also means that the data are independently distributed, which was shown by the histograms in the project's visualization section. This assumption is satisfied.
+
+### Does the factor analysis help, or is it a waste of time?
+
+From the results from the models before and after the factor analysis, it seems to be that the factor analysis does help the logistic regression model, but does not help the LDA model. I would say that the factor analysis helps even though the accuracies are already considerably high for the models before the dimension reduction. In the process of factor analysis, I am able to find out which variables are the most essential to the outcome, and therefore I can reduce the number of input variables. This process has improved the interpretation of the parameters of the model, making it easier to visualize the data by lowering the dimension, thereby reducing redundancy and space complexity.
+
+To arrive at a final model for each fold, the following section will complete this task.
+
+### Combine Results
+```{r}
+# combine all fold accuracy for each model into one dataframe
+folds_accuracy <- cbind(glm_fold_accuracy1[,1],glm_fold_accuracy2[,1],lda_fold_accuracy1[,1],lda_fold_accuracy2[,1])
+colnames(folds_accuracy) <- c("glm1", "glm2", "lda1", "lda2")
+rownames(folds_accuracy) <- c("Fold 1", "Fold 2", "Fold 3", "Fold 4", "Fold 5", "Fold 6", "Fold 7", "Fold 8", "Fold 9", "Fold 10")
+folds_accuracy <- as.data.frame(folds_accuracy)
+folds_accuracy
+```
+
+The column names above stand for:
+1. glm1: original logistic regression model
+2. glm2: modified logistic regression model
+3. lda1: original LDA model
+4. lda2: modified LDA model
+
+The table above sums up the accuracy of each fold under four models (original and modified logistic regression model, original and modified LDA model). As the table suggests, glm 1 has 100% accuracy for most of the folds, and 95% for Fold 5, 7, 10; glm 2 has 100% accuracy for most of the folds, and 95% for Fold 6 and 8. I can say that the new logistic regression model has an improved performance, since it has higher overall accuracy. 
+
+For the LDA model, lda 1 has 100% accuracy for most of the folds, and 95% for Fold 5; lda 2 has 100% accuracy for most of the folds, and 95% for Fold 6. There is no difference between the original LDA model's and modified LDA model's overall accuracy.
+
+To put all these 4 models into comparison, I would say that both of the LDA model (lda 1 & lda 2) are the best model, since they has 100% accuracy for all folds except for one fold the accuracy is 95%. However, I would use the modified LDA model (lda 2) as the final model, since it has reduced dimension and redundancy, becoming more efficient in application.
+
+## Conclusion (with displays)
+In this project, I try to find out whether or not we can predict whether a note is false or counterfeit using supervised learning. To begin with, I loaded the dataset and I have add one more column for authenticity as "ctf", where 0 is genuine and 1 is counterfeit. Then, I created some visualizations to get a brief picture of the dataset. To have a better understanding, I plotted the graphs for the dataset as a whole and for two groups (genuine and counterfeit) separately. At this point, I have noticed that there are some considerable difference between these two groups, which might affect the analysis later. I have shuffled the data for better modeling.
+
+In the first part of the analysis, I built linear regression model and LDA model using caret, predicting the outcome variable by all six of the variables. The overall accuracy for linear regression model is 98.5% with a Kappa score of 0.97, indicating that it is an almost perfect model. For LDA model, the overall accuracy is 99.5% with a Kappa score of 0.99, indicating that it is an almost perfect model as well. I saved the accuracy for each fold for later interpretation.
+
+After first modeling, I have conducted factor analysis, including PCA and MLE, trying to refine the six covariates using a factor model to reduce the dimension and remove any redundancy. As a result, I have refined the variables into 2 factors. By using these two factors scores as predictor variables, I re-run the linear regression model and LDA model. The new logistic regression model has an overall accuracy of 99% with a Kappa score of 0.98, indicating that it is an almost perfect model. Also, the new LDA model has an overall accuracy of 99.5% with a Kappa score of 0.99, indicating that it is an almost perfect model. I also saved the accuracy for each fold for later interpretation.
+
+Comparing the model performance before and after, the logistic regression model has an improved accuracy, while the performance is the same for the LDA model. Noted that the accuracies for both original model were considerably high before the factor analysis. However, I would still say that the factor analysis is somewhat helpful, since it improved some accuracy and reduce the dimension and redundancy. 
+
+Combining the results across fold, I have made visualizations by using line plots, since it can clearly show the accuracy for each fold in this situation. The plots are below:
+```{r}
+par(mfrow = c(2,2))
+plot(folds_accuracy$glm1, main = "Original Logistic Regression Accuracy", ylab = "Accuracy", xlab = "Fold")
+lines(folds_accuracy$glm1)
+axis(side = 1, at = c(1:10))
+plot(folds_accuracy$glm2, main = "Modified Logistic Regression Accuracy", ylab = "Accuracy", xlab = "Fold")
+lines(folds_accuracy$glm2)
+axis(side = 1, at = c(1:10))
+plot(folds_accuracy$lda1, main = "Original LDA Accuracy", ylab = "Accuracy", xlab = "Fold")
+lines(folds_accuracy$lda1)
+axis(side = 1, at = c(1:10))
+plot(folds_accuracy$lda2, main = "Modified LDA Accuracy", ylab = "Accuracy", xlab = "Fold")
+lines(folds_accuracy$lda2)
+axis(side = 1, at = c(1:10))
+```
+
+From the plots above, I can see that all of these four models have really high accuracies for each fold. Recall the boxplots in the project's visualization section, there are kind of difference between the genuine group and counterfeit group, which might be the reason why all of the models have an almost perfect accuracy. Among all these models, both of the LDA model have the best performance by having 100% accuracy for 9 fold and 95% for 1 fold. To pick a final model, I would use the modified LDA model (lda 2), because it has reduced dimension and redundancy, becoming more efficient in application. 
+After all these analysis, I believe that we can predict whether a note is false or counterfeit using supervised learning.
